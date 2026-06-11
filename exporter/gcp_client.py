@@ -116,10 +116,10 @@ class GCPMonitoringClient:
             TimeSeries 列表（每个实例一条）
         """
         base_filter = f'metric.type = "{self.CLOUDSQL_CPU_METRIC}"'
-        # database_id 格式为 "project:instance"，用 monitoring.has_substring 模糊匹配
+        # database_id 完整格式为 "project_id:instance_name"，用精确匹配
         if instances:
             conditions = [
-                f'monitoring.has_substring(resource.labels.database_id, ":{inst}")'
+                f'resource.labels.database_id = "{self.project_id}:{inst}"'
                 for inst in instances
             ]
             filter_str = base_filter + " AND (" + " OR ".join(conditions) + ")"
