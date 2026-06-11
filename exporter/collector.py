@@ -167,17 +167,20 @@ class GCPCollector:
         results = self.gcp_client.query_memorystore_cpu(
             start_offset=self.start_offset,
             end_offset=self.end_offset,
-            instances=instances if instances else None,
         )
 
         count = 0
-        # 兑底逻辑：如果 API 聚合未生效，按实例名合并取总和
-        # CPU 秒/秒是可加的：user+system+main+background 的总和才是实例整体 CPU 用量
+        # 兑底合并：同一实例的多个 metric label 维度（cpu_type/process_type）
+        # 按实例名累加，CPU 秒/秒是可加的
         merged = {}  # {instance_name: {"value": float, "timestamp_ms": int}}
 
         for ts in results:
             raw_id = ts.resource.labels.get("instance_id", "unknown")
             instance_name = self._extract_memorystore_instance_name(raw_id)
+
+            # 如果配置了实例列表，只保留配置的实例
+            if instances and instance_name not in instances:
+                continue
 
             if not ts.points:
                 continue

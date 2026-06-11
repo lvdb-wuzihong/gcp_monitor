@@ -139,43 +139,27 @@ class GCPMonitoringClient:
             return []
 
     def query_memorystore_cpu(
-        self, start_offset: int = 600, end_offset: int = 180,
-        instances: List[str] = None
+        self, start_offset: int = 600, end_offset: int = 180
     ) -> List:
         """
         查询 Memorystore (Redis) CPU 使用率（窗口内均值）
 
-        使用 REDUCE_MEAN + group_by instance_id，将同一实例的多个 shard/node
-        聚合为一个均值，确保每个实例只输出一条数据。
+        仅用 ALIGN_MEAN 聚合时间维度。不同 metric label（cpu_type/process_type）
+        仍会返回多条 TimeSeries，由 collector 层按实例名累加合并。
 
         Args:
             start_offset: 查询窗口起始（距当前秒数）
             end_offset:   查询窗口结束（距当前秒数）
-            instances:    指定实例列表，为空则查询所有
 
         Returns:
-            TimeSeries 列表（每个实例一条）
+            TimeSeries 列表（同一实例可能多条，collector 层合并）
         """
-        base_filter = f'metric.type = "{self.MEMORystore_CPU_METRIC}"'
-        # instance_id 是完整路径 "projects/xxx/locations/yyy/instances/zzz"
-        # 用正则匹配 =~ 在路径中查找实例名
-        if instances:
-            conditions = [
-                f'resource.labels.instance_id =~ ".*{inst}.*"'
-                for inst in instances
-            ]
-            filter_str = base_filter + " AND (" + " OR ".join(conditions) + ")"
-        else:
-            filter_str = base_filter
+        filter_str = f'metric.type = "{self.MEMORystore_CPU_METRIC}"'
 
         logger.info(f"Memorystore 查询: filter={filter_str}")
 
         try:
-            request = self._build_request(
-                filter_str, start_offset, end_offset,
-                # 按 instance_id 分组聚合，将多个 shard/metric label 合并为一个值
-                group_by_fields=["resource.labels.instance_id"],
-            )
+            request = self._build_request(filter_str, start_offset, end_offset)
             results = list(self.client.list_time_series(request=request))
             logger.info(f"Memorystore 返回 {len(results)} 个时间序列")
             return results
