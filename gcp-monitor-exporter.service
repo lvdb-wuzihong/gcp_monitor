@@ -1,0 +1,39 @@
+[Unit]
+Description=GCP Monitor Exporter - Prometheus metrics for Cloud SQL and Memorystore
+Documentation=https://cloud.google.com/monitoring/docs
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gcp-exporter
+Group=gcp-exporter
+
+# 工作目录
+WorkingDirectory=/opt/gcp_monitor
+
+# GCP 服务账号密钥路径（必须设置）
+Environment="GOOGLE_APPLICATION_CREDENTIALS=/opt/gcp_monitor/service-account-key.json"
+
+# 启动命令
+ExecStart=/usr/bin/python3 /opt/gcp_monitor/main.py --config /opt/gcp_monitor/config.yaml --log-level INFO
+
+# 异常退出自动重启
+Restart=on-failure
+RestartSec=10s
+
+# 安全加固
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+
+# 日志输出到 journal
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=gcp-monitor-exporter
+
+[Install]
+WantedBy=multi-user.target

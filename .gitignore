@@ -28,6 +28,3 @@ service-account-key.json
 # 系统文件
 .DS_Store
 Thumbs.db
-
-# Docker 数据卷
-prometheus-data/
