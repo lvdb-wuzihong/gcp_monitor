@@ -1,0 +1,64 @@
+# GCP Monitor Exporter + Prometheus 部署编排
+#
+# 使用方式：
+#   1. 将服务账号密钥文件放到项目根目录，命名为 service-account-key.json
+#   2. 修改 config.yaml 中的 gcp.project_id
+#   3. 执行: docker-compose up -d
+#   4. Prometheus:  http://localhost:9090
+#   5. Exporter:    http://localhost:9100/metrics
+
+version: "3.8"
+
+services:
+  # ========================================================================
+  # GCP Monitor Exporter
+  # ========================================================================
+  gcp-monitor-exporter:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: gcp-monitor-exporter
+    restart: unless-stopped
+    ports:
+      - "9100:9100"
+    volumes:
+      # GCP 服务账号密钥（只读挂载）
+      - ./service-account-key.json:/app/service-account-key.json:ro
+      # 配置文件（只读挂载，方便修改后重启生效）
+      - ./config.yaml:/app/config.yaml:ro
+    environment:
+      # GCP 认证凭据路径
+      GOOGLE_APPLICATION_CREDENTIALS: /app/service-account-key.json
+    networks:
+      - monitor-net
+
+  # ========================================================================
+  # Prometheus
+  # ========================================================================
+  prometheus:
+    image: prom/prometheus:v2.52.0
+    container_name: prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      # Prometheus 配置文件
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # 数据持久化（可选，按需开启）
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=7d"
+      - "--web.enable-lifecycle"   # 启用热重载 API: POST /-/reload
+    depends_on:
+      - gcp-monitor-exporter
+    networks:
+      - monitor-net
+
+volumes:
+  prometheus-data:
+    driver: local
+
+networks:
+  monitor-net:
+    driver: bridge

@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# 虚拟环境
+venv/
+env/
+.venv/
+
+# GCP 服务账号密钥（敏感文件，绝对不要提交）
+service-account-key.json
+*.json
+
+# 配置文件中的敏感信息（如有本地修改，使用 .gitignore 屏蔽）
+# config.yaml  # 按需决定是否提交
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# Docker 数据卷
+prometheus-data/

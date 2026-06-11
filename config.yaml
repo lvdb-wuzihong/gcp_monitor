@@ -1,0 +1,31 @@
+# GCP Monitor Exporter 配置文件
+
+gcp:
+  # GCP 项目 ID（必填，请替换为实际项目 ID）
+  project_id: "your-gcp-project-id"
+
+# 采集间隔（秒），最小值 60，与 GCP 内置指标采样间隔一致
+scrape_interval: 60
+
+# 查询时间偏移（秒），用于应对 GCP 数据延迟（通常 3~5 分钟）
+# 240 秒 = 4 分钟，建议范围 180~300
+query_offset: 240
+
+# Prometheus 指标暴露端口
+port: 9100
+
+# Cloud SQL 监控配置
+cloudsql:
+  # 是否启用 Cloud SQL 指标采集
+  enabled: true
+  # 指定实例列表，留空则自动发现项目下所有 Cloud SQL 实例
+  # 示例: ["my-sql-instance-1", "my-sql-instance-2"]
+  instances: []
+
+# Memorystore (Redis) 监控配置
+memorystore:
+  # 是否启用 Memorystore 指标采集
+  enabled: true
+  # 指定实例列表，留空则自动发现项目下所有 Memorystore 实例
+  # 示例: ["my-redis-instance-1"]
+  instances: []
