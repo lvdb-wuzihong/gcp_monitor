@@ -157,10 +157,14 @@ class GCPMonitoringClient:
             TimeSeries 列表（每个实例一条）
         """
         base_filter = f'metric.type = "{self.MEMORystore_CPU_METRIC}"'
+        # instance_id 是完整路径 "projects/xxx/locations/yyy/instances/zzz"
+        # 用正则匹配 =~ 在路径中查找实例名
         if instances:
-            filter_str = self._add_instance_filter(
-                base_filter, "instance_id", instances
-            )
+            conditions = [
+                f'resource.labels.instance_id =~ ".*{inst}.*"'
+                for inst in instances
+            ]
+            filter_str = base_filter + " AND (" + " OR ".join(conditions) + ")"
         else:
             filter_str = base_filter
 
