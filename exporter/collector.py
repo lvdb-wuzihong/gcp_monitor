@@ -56,10 +56,10 @@ class GCPCollector:
         scrape_start = time.monotonic()
 
         # =====================================================================
-        # Cloud SQL CPU
+        # Cloud SQL CPU / Memory / Disk
         # =====================================================================
         if self.cloudsql_config.get("enabled", True):
-            yield from self._collect_cloudsql()
+            yield from self._collect_cloudsql_metrics()
 
         # =====================================================================
         # Memorystore CPU
@@ -106,47 +106,71 @@ class GCPCollector:
             return instance_id.rsplit("/", 1)[-1]
         return instance_id
 
-    def _collect_cloudsql(self):
-        """采集 Cloud SQL CPU 使用率"""
-        metric = GaugeMetricFamily(
-            "gcp_cloudsql_cpu_utilization",
-            "Cloud SQL CPU Utilization (percentage 0-100)",
-            labels=["mysql_name"],
-        )
+    def _collect_cloudsql_metrics(self):
+        """
+        采集 Cloud SQL 三项指标：CPU / Memory / Disk 使用率
+
+        cpu/utilization:    API 返回 0.0-1.0，×100 转百分比
+        memory/utilization: API 返回 0.0-1.0，×100 转百分比
+        disk/utilization:   API 返回 0.0-1.0，×100 转百分比
+        """
+        metrics_config = [
+            {
+                "metric_type": self.gcp_client.CLOUDSQL_CPU_METRIC,
+                "name": "gcp_cloudsql_cpu_utilization",
+                "desc": "Cloud SQL CPU Utilization (percentage 0-100)",
+                "label_key": "cpu",
+            },
+            {
+                "metric_type": self.gcp_client.CLOUDSQL_MEMORY_METRIC,
+                "name": "gcp_cloudsql_memory_utilization",
+                "desc": "Cloud SQL Memory Utilization (percentage 0-100)",
+                "label_key": "memory",
+            },
+            {
+                "metric_type": self.gcp_client.CLOUDSQL_DISK_METRIC,
+                "name": "gcp_cloudsql_disk_utilization",
+                "desc": "Cloud SQL Disk Utilization (percentage 0-100)",
+                "label_key": "disk",
+            },
+        ]
 
         instances = self.cloudsql_config.get("instances", []) or []
 
-        results = self.gcp_client.query_cloudsql_cpu(
-            start_offset=self.start_offset,
-            end_offset=self.end_offset,
-            instances=instances if instances else None,
-        )
+        for cfg in metrics_config:
+            metric = GaugeMetricFamily(cfg["name"], cfg["desc"], labels=["mysql_name"])
 
-        count = 0
-        for ts in results:
-            raw_id = ts.resource.labels.get("database_id", "unknown")
-            instance_name = self._extract_cloudsql_instance_name(raw_id)
-
-            if not ts.points:
-                continue
-
-            latest_point = ts.points[0]
-            cpu_val = latest_point.value.double_value * 100
-
-            timestamp_ms = int(
-                latest_point.interval.end_time.timestamp() * 1000
+            results = self.gcp_client.query_cloudsql_metric(
+                metric_type=cfg["metric_type"],
+                start_offset=self.start_offset,
+                end_offset=self.end_offset,
+                instances=instances if instances else None,
             )
 
-            metric.add_metric(
-                labels=[instance_name],
-                value=round(cpu_val, 2),
-                timestamp=timestamp_ms,
-            )
-            count += 1
-            logger.info(f"Cloud SQL [{instance_name}] CPU: {cpu_val:.2f}%")
+            count = 0
+            for ts in results:
+                raw_id = ts.resource.labels.get("database_id", "unknown")
+                instance_name = self._extract_cloudsql_instance_name(raw_id)
 
-        logger.info(f"Cloud SQL: 输出 {count} 个实例指标")
-        yield metric
+                if not ts.points:
+                    continue
+
+                latest_point = ts.points[0]
+                val = latest_point.value.double_value * 100  # 0.0-1.0 → 0-100%
+
+                timestamp_ms = int(
+                    latest_point.interval.end_time.timestamp() * 1000
+                )
+
+                metric.add_metric(
+                    labels=[instance_name],
+                    value=round(val, 2),
+                    timestamp=timestamp_ms,
+                )
+                count += 1
+
+            logger.info(f"Cloud SQL [{cfg['label_key']}]: 输出 {count} 个实例指标")
+            yield metric
 
     def _collect_memorystore(self):
         """

@@ -19,8 +19,11 @@ logger = logging.getLogger(__name__)
 class GCPMonitoringClient:
     """GCP Cloud Monitoring API 客户端封装"""
 
-    # 指标类型
+    # Cloud SQL 指标类型
     CLOUDSQL_CPU_METRIC = "cloudsql.googleapis.com/database/cpu/utilization"
+    CLOUDSQL_MEMORY_METRIC = "cloudsql.googleapis.com/database/memory/utilization"
+    CLOUDSQL_DISK_METRIC = "cloudsql.googleapis.com/database/disk/utilization"
+    # Memorystore 指标类型
     MEMORystore_CPU_METRIC = "redis.googleapis.com/stats/cpu_utilization_main_thread"
 
     def __init__(self, project_id: str):
@@ -100,14 +103,15 @@ class GCPMonitoringClient:
         ]
         return base_filter + " AND (" + " OR ".join(conditions) + ")"
 
-    def query_cloudsql_cpu(
-        self, start_offset: int = 600, end_offset: int = 180,
+    def query_cloudsql_metric(
+        self, metric_type: str, start_offset: int = 600, end_offset: int = 180,
         instances: List[str] = None
     ) -> List:
         """
-        查询 Cloud SQL CPU 使用率（窗口内均值）
+        查询 Cloud SQL 指标（通用方法）
 
         Args:
+            metric_type:  指标类型（如 CLOUDSQL_CPU_METRIC）
             start_offset: 查询窗口起始（距当前秒数）
             end_offset:   查询窗口结束（距当前秒数）
             instances:    指定实例列表，为空则查询所有
@@ -115,7 +119,7 @@ class GCPMonitoringClient:
         Returns:
             TimeSeries 列表（每个实例一条）
         """
-        base_filter = f'metric.type = "{self.CLOUDSQL_CPU_METRIC}"'
+        base_filter = f'metric.type = "{metric_type}"'
         # database_id 完整格式为 "project_id:instance_name"，用精确匹配
         if instances:
             conditions = [
@@ -131,11 +135,11 @@ class GCPMonitoringClient:
         try:
             request = self._build_request(filter_str, start_offset, end_offset)
             results = list(self.client.list_time_series(request=request))
-            logger.info(f"Cloud SQL 返回 {len(results)} 个时间序列")
+            logger.info(f"Cloud SQL [{metric_type.split('/')[-1]}] 返回 {len(results)} 个时间序列")
             return results
 
         except Exception as e:
-            logger.error(f"查询 Cloud SQL CPU 失败: {e}", exc_info=True)
+            logger.error(f"查询 Cloud SQL 指标失败 ({metric_type}): {e}", exc_info=True)
             return []
 
     def query_memorystore_cpu(
