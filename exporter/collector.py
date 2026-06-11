@@ -111,7 +111,7 @@ class GCPCollector:
         metric = GaugeMetricFamily(
             "gcp_cloudsql_cpu_utilization",
             "Cloud SQL CPU Utilization (percentage 0-100)",
-            labels=["instance"],
+            labels=["mysql_name"],
         )
 
         instances = self.cloudsql_config.get("instances", []) or []
