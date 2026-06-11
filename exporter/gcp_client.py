@@ -43,27 +43,32 @@ class GCPMonitoringClient:
             raise
 
     def _build_time_interval(
-        self, offset_seconds: int, window_seconds: int = None
+        self, end_offset_seconds: int, start_offset_seconds: int
     ) -> monitoring_v3.TimeInterval:
         """
         构建查询的时间区间
 
-        由于 GCP 指标存在 3~5 分钟的数据延迟，需要通过 offset_seconds 将查询窗口
-        向过去偏移，以确保能获取到有效数据。
+        通过两个偏移量定义窗口：
+          end_time   = now - end_offset_seconds   （窗口结束时间，距当前多久）
+          start_time = now - start_offset_seconds  （窗口开始时间，距当前多久）
+
+        例如：end_offset=60, start_offset=360
+          → 查询 (now-6分钟) 到 (now-1分钟) 的数据
 
         Args:
-            offset_seconds: 查询结束时间距离当前时间的偏移量（秒）
-            window_seconds: 查询窗口大小（秒），默认为 offset_seconds
+            end_offset_seconds:   end_time 距当前的偏移（秒），较小值
+            start_offset_seconds: start_time 距当前的偏移（秒），较大值
 
         Returns:
             TimeInterval 对象
         """
-        if window_seconds is None:
-            window_seconds = offset_seconds
-
         now = datetime.now(timezone.utc)
-        end_time = now - timedelta(seconds=offset_seconds)
-        start_time = end_time - timedelta(seconds=window_seconds)
+        end_time = now - timedelta(seconds=end_offset_seconds)
+        start_time = now - timedelta(seconds=start_offset_seconds)
+
+        logger.debug(
+            f"查询时间区间: start={start_time.isoformat()}, end={end_time.isoformat()}"
+        )
 
         return monitoring_v3.TimeInterval(
             {
@@ -108,10 +113,13 @@ class GCPMonitoringClient:
 
         指标: cloudsql.googleapis.com/database/cpu/utilization
         值类型: DOUBLE（0.0 ~ 1.0）
-        资源标签: database_id（格式为 project:instance_name）
+        资源标签: database_id（格式为 project_id:instance_name）
+
+        时间窗口: (now - offset*3, now - offset/3)
+        例: offset=180 → 查询 (now-540s, now-60s)，即 9 分钟前到 1 分钟前
 
         Args:
-            offset_seconds: 查询时间偏移（秒），用于应对数据延迟
+            offset_seconds: 查询时间偏移基准（秒），用于应对数据延迟
             instances: 指定实例列表，为空则查询所有实例
 
         Returns:
@@ -125,10 +133,21 @@ class GCPMonitoringClient:
                 instances or [],
             )
 
+            # 窗口结束时间：offset/3 秒前（留一定延迟余量）
+            # 窗口开始时间：offset*3 秒前（覆盖足够宽的数据范围）
+            end_offset = max(60, offset_seconds // 3)
+            start_offset = offset_seconds * 3
+            interval = self._build_time_interval(end_offset, start_offset)
+
+            logger.info(
+                f"Cloud SQL 查询 filter={filter_str}, "
+                f"end_offset={end_offset}s, start_offset={start_offset}s"
+            )
+
             request = monitoring_v3.ListTimeSeriesRequest(
                 name=self.project_name,
                 filter=filter_str,
-                interval=self._build_time_interval(offset_seconds),
+                interval=interval,
                 aggregation=monitoring_v3.Aggregation(
                     alignment_period={"seconds": self.MIN_ALIGNMENT_PERIOD},
                     per_series_aligner=monitoring_v3.Aggregation.Aligner.ALIGN_MEAN,
@@ -141,7 +160,7 @@ class GCPMonitoringClient:
             return results
 
         except Exception as e:
-            logger.error(f"查询 Cloud SQL CPU 使用率失败: {e}")
+            logger.error(f"查询 Cloud SQL CPU 使用率失败: {e}", exc_info=True)
             return []
 
     def query_memorystore_cpu(
@@ -155,7 +174,7 @@ class GCPMonitoringClient:
         资源标签: instance_id
 
         Args:
-            offset_seconds: 查询时间偏移（秒），用于应对数据延迟
+            offset_seconds: 查询时间偏移基准（秒），用于应对数据延迟
             instances: 指定实例列表，为空则查询所有实例
 
         Returns:
@@ -169,10 +188,19 @@ class GCPMonitoringClient:
                 instances or [],
             )
 
+            end_offset = max(60, offset_seconds // 3)
+            start_offset = offset_seconds * 3
+            interval = self._build_time_interval(end_offset, start_offset)
+
+            logger.info(
+                f"Memorystore 查询 filter={filter_str}, "
+                f"end_offset={end_offset}s, start_offset={start_offset}s"
+            )
+
             request = monitoring_v3.ListTimeSeriesRequest(
                 name=self.project_name,
                 filter=filter_str,
-                interval=self._build_time_interval(offset_seconds),
+                interval=interval,
                 aggregation=monitoring_v3.Aggregation(
                     alignment_period={"seconds": self.MIN_ALIGNMENT_PERIOD},
                     per_series_aligner=monitoring_v3.Aggregation.Aligner.ALIGN_MEAN,
@@ -185,17 +213,15 @@ class GCPMonitoringClient:
             return results
 
         except Exception as e:
-            logger.error(f"查询 Memorystore CPU 使用率失败: {e}")
+            logger.error(f"查询 Memorystore CPU 使用率失败: {e}", exc_info=True)
             return []
 
-    def discover_cloudsql_instances(self, offset_seconds: int = 600) -> List[str]:
+    def discover_cloudsql_instances(self) -> List[str]:
         """
         自动发现 Cloud SQL 实例
 
-        通过查询最近 10 分钟的 CPU 指标数据，从返回的时间序列中提取实例名称。
-
-        Args:
-            offset_seconds: 查询时间偏移（秒），默认 10 分钟
+        通过查询最近 15 分钟的 CPU 指标数据，从返回的时间序列中提取实例名称。
+        窗口: (now-15min, now-60s)，覆盖延迟同时尽量获取最新数据。
 
         Returns:
             实例名称列表
@@ -205,38 +231,47 @@ class GCPMonitoringClient:
                 self.CLOUDSQL_CPU_METRIC, self.CLOUDSQL_RESOURCE_TYPE, "database_id", []
             )
 
+            # 查询最近 15 分钟，end_time 距当前 60 秒（留最小延迟余量）
+            interval = self._build_time_interval(
+                end_offset_seconds=60, start_offset_seconds=900
+            )
+
+            logger.info(f"Cloud SQL 自动发现 filter={filter_str}")
+
             request = monitoring_v3.ListTimeSeriesRequest(
                 name=self.project_name,
                 filter=filter_str,
-                interval=self._build_time_interval(offset_seconds, window_seconds=600),
-                view=monitoring_v3.ListTimeSeriesRequest.TimeSeriesView.FULL,
+                interval=interval,
+                view=monitoring_v3.ListTimeSeriesRequest.TimeSeriesView.HEADERS,
             )
 
             results = self.client.list_time_series(request=request)
             instances = []
             for ts in results:
-                # database_id 格式为 "project_id:instance_name"
-                db_id = ts.resource.labels.get("database_id", "")
+                labels = ts.resource.labels
+                logger.debug(f"Cloud SQL 资源标签: {dict(labels)}")
+                # database_id 格式通常为 "project_id:instance_name"
+                db_id = labels.get("database_id", "")
                 if ":" in db_id:
                     instance_name = db_id.split(":", 1)[1]
-                    if instance_name not in instances:
-                        instances.append(instance_name)
+                else:
+                    instance_name = db_id
+                if instance_name and instance_name not in instances:
+                    instances.append(instance_name)
 
-            logger.info(f"自动发现 Cloud SQL 实例: {instances}")
+            logger.info(f"自动发现 Cloud SQL 实例 ({len(instances)} 个): {instances}")
             return instances
 
         except Exception as e:
-            logger.error(f"自动发现 Cloud SQL 实例失败: {e}")
+            logger.error(f"自动发现 Cloud SQL 实例失败: {e}", exc_info=True)
             return []
 
-    def discover_memorystore_instances(self, offset_seconds: int = 600) -> List[str]:
+    def discover_memorystore_instances(self) -> List[str]:
         """
         自动发现 Memorystore (Redis) 实例
 
-        通过查询最近 10 分钟的 CPU 指标数据，从返回的时间序列中提取实例名称。
-
-        Args:
-            offset_seconds: 查询时间偏移（秒），默认 10 分钟
+        通过查询最近 15 分钟的 CPU 指标数据，从返回的时间序列中提取实例名称。
+        窗口: (now-15min, now-60s)。
 
         Returns:
             实例名称列表
@@ -249,23 +284,31 @@ class GCPMonitoringClient:
                 [],
             )
 
+            interval = self._build_time_interval(
+                end_offset_seconds=60, start_offset_seconds=900
+            )
+
+            logger.info(f"Memorystore 自动发现 filter={filter_str}")
+
             request = monitoring_v3.ListTimeSeriesRequest(
                 name=self.project_name,
                 filter=filter_str,
-                interval=self._build_time_interval(offset_seconds, window_seconds=600),
-                view=monitoring_v3.ListTimeSeriesRequest.TimeSeriesView.FULL,
+                interval=interval,
+                view=monitoring_v3.ListTimeSeriesRequest.TimeSeriesView.HEADERS,
             )
 
             results = self.client.list_time_series(request=request)
             instances = []
             for ts in results:
-                instance_id = ts.resource.labels.get("instance_id", "")
+                labels = ts.resource.labels
+                logger.debug(f"Memorystore 资源标签: {dict(labels)}")
+                instance_id = labels.get("instance_id", "")
                 if instance_id and instance_id not in instances:
                     instances.append(instance_id)
 
-            logger.info(f"自动发现 Memorystore 实例: {instances}")
+            logger.info(f"自动发现 Memorystore 实例 ({len(instances)} 个): {instances}")
             return instances
 
         except Exception as e:
-            logger.error(f"自动发现 Memorystore 实例失败: {e}")
+            logger.error(f"自动发现 Memorystore 实例失败: {e}", exc_info=True)
             return []
