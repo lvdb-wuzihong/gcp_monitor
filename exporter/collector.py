@@ -114,9 +114,12 @@ class GCPCollector:
             labels=["instance"],
         )
 
+        instances = self.cloudsql_config.get("instances", []) or []
+
         results = self.gcp_client.query_cloudsql_cpu(
             start_offset=self.start_offset,
             end_offset=self.end_offset,
+            instances=instances if instances else None,
         )
 
         count = 0
@@ -146,19 +149,32 @@ class GCPCollector:
         yield metric
 
     def _collect_memorystore(self):
-        """采集 Memorystore (Redis) CPU 使用率"""
+        """
+        采集 Memorystore (Redis) CPU 时间占比
+
+        注意：redis.googleapis.com/stats/cpu_utilization 的单位是
+        CPU 秒/秒（不是百分比），乘以 100 转为百分比形式。
+        GCP 官方建议阈值：不要超过 0.8（即 80%）。
+        """
         metric = GaugeMetricFamily(
             "gcp_memorystore_cpu_utilization",
-            "Memorystore Redis CPU Utilization (percentage 0-100)",
+            "Memorystore Redis CPU seconds per second * 100 (GCP threshold: 80 = 0.8s/s)",
             labels=["instance"],
         )
+
+        instances = self.memorystore_config.get("instances", []) or []
 
         results = self.gcp_client.query_memorystore_cpu(
             start_offset=self.start_offset,
             end_offset=self.end_offset,
+            instances=instances if instances else None,
         )
 
         count = 0
+        # 兑底逻辑：如果 API 聚合未生效，按实例名合并取总和
+        # CPU 秒/秒是可加的：user+system+main+background 的总和才是实例整体 CPU 用量
+        merged = {}  # {instance_name: {"value": float, "timestamp_ms": int}}
+
         for ts in results:
             raw_id = ts.resource.labels.get("instance_id", "unknown")
             instance_name = self._extract_memorystore_instance_name(raw_id)
@@ -167,19 +183,33 @@ class GCPCollector:
                 continue
 
             latest_point = ts.points[0]
-            cpu_val = latest_point.value.double_value * 100
-
+            cpu_val = latest_point.value.double_value  # 原始值 s/s
             timestamp_ms = int(
                 latest_point.interval.start_time.timestamp() * 1000
             )
 
+            if instance_name in merged:
+                # 同一实例多条 → 累加（user/system/main/background 可加）
+                merged[instance_name]["value"] += cpu_val
+                # 取较新的时间戳
+                merged[instance_name]["timestamp_ms"] = max(
+                    merged[instance_name]["timestamp_ms"], timestamp_ms
+                )
+            else:
+                merged[instance_name] = {"value": cpu_val, "timestamp_ms": timestamp_ms}
+
+        for instance_name, data in merged.items():
+            cpu_pct = data["value"] * 100
             metric.add_metric(
                 labels=[instance_name],
-                value=round(cpu_val, 2),
-                timestamp=timestamp_ms,
+                value=round(cpu_pct, 2),
+                timestamp=data["timestamp_ms"],
             )
             count += 1
-            logger.info(f"Memorystore [{instance_name}] CPU: {cpu_val:.2f}%")
+            logger.info(
+                f"Memorystore [{instance_name}] CPU: {cpu_pct:.2f} "
+                f"(raw: {data['value']:.4f} s/s)"
+            )
 
         logger.info(f"Memorystore: 输出 {count} 个实例指标")
         yield metric

@@ -46,47 +46,87 @@ class GCPMonitoringClient:
             "start_time": {"seconds": int(now - start_offset)},
         })
 
-    def _build_request(self, filter_str, start_offset, end_offset):
+    def _build_request(
+        self, filter_str, start_offset, end_offset,
+        group_by_fields=None
+    ):
         """
-        构建 ListTimeSeries 请求（带 ALIGN_MEAN 聚合）
+        构建 ListTimeSeries 请求
 
-        ALIGN_MEAN 会将时间窗口内所有数据点合并为一个均值，
-        确保每个实例只返回一条 TimeSeries，避免返回多个原始数据点。
-        alignment_period 设为整个窗口大小，保证只产生一个聚合点。
+        ALIGN_MEAN: 将窗口内多个数据点合并为一个均值
+        REDUCE_MEAN + group_by_fields: 将同一实例的多个 shard/node 合并为一个均值
         """
         interval = self._build_interval(start_offset, end_offset)
-        alignment_period = start_offset - end_offset  # 窗口大小
+        alignment_period = start_offset - end_offset
+
+        aggregation = {
+            "alignment_period": {"seconds": alignment_period},
+            "per_series_aligner": monitoring_v3.Aggregation.Aligner.ALIGN_MEAN,
+        }
+
+        # cross_series_reducer: 将同一实例的多个子序列（shard/node）聚合为一个
+        if group_by_fields:
+            aggregation["cross_series_reducer"] = (
+                monitoring_v3.Aggregation.Reducer.REDUCE_MEAN
+            )
+            aggregation["group_by_fields"] = group_by_fields
 
         return {
             "name": self.project_name,
             "filter": filter_str,
             "interval": interval,
             "view": monitoring_v3.ListTimeSeriesRequest.TimeSeriesView.FULL,
-            "aggregation": {
-                "alignment_period": {"seconds": alignment_period},
-                "per_series_aligner": monitoring_v3.Aggregation.Aligner.ALIGN_MEAN,
-            },
+            "aggregation": aggregation,
         }
 
+    @staticmethod
+    def _add_instance_filter(base_filter: str, label_key: str, instances: List[str]) -> str:
+        """
+        在 base filter 上追加实例过滤条件
+
+        Args:
+            base_filter: 基础过滤器（如 metric.type = "..."）
+            label_key:   资源标签键名（如 database_id、instance_id）
+            instances:   实例名列表
+
+        Returns:
+            追加了实例条件的过滤器字符串
+        """
+        if not instances:
+            return base_filter
+
+        conditions = [
+            f'resource.labels.{label_key} = "{inst}"' for inst in instances
+        ]
+        return base_filter + " AND (" + " OR ".join(conditions) + ")"
+
     def query_cloudsql_cpu(
-        self, start_offset: int = 600, end_offset: int = 180
+        self, start_offset: int = 600, end_offset: int = 180,
+        instances: List[str] = None
     ) -> List:
         """
         查询 Cloud SQL CPU 使用率（窗口内均值）
 
         Args:
-            start_offset: 查询窗口起始（距当前秒数），默认 600（10分钟前）
-            end_offset:   查询窗口结束（距当前秒数），默认 180（3分钟前）
+            start_offset: 查询窗口起始（距当前秒数）
+            end_offset:   查询窗口结束（距当前秒数）
+            instances:    指定实例列表，为空则查询所有
 
         Returns:
             TimeSeries 列表（每个实例一条）
         """
-        filter_str = f'metric.type = "{self.CLOUDSQL_CPU_METRIC}"'
+        base_filter = f'metric.type = "{self.CLOUDSQL_CPU_METRIC}"'
+        # database_id 格式为 "project:instance"，用 monitoring.has_substring 模糊匹配
+        if instances:
+            conditions = [
+                f'monitoring.has_substring(resource.labels.database_id, ":{inst}")'
+                for inst in instances
+            ]
+            filter_str = base_filter + " AND (" + " OR ".join(conditions) + ")"
+        else:
+            filter_str = base_filter
 
-        logger.info(
-            f"Cloud SQL 查询: filter={filter_str}, "
-            f"window=(now-{start_offset}s, now-{end_offset}s)"
-        )
+        logger.info(f"Cloud SQL 查询: filter={filter_str}")
 
         try:
             request = self._build_request(filter_str, start_offset, end_offset)
@@ -99,27 +139,39 @@ class GCPMonitoringClient:
             return []
 
     def query_memorystore_cpu(
-        self, start_offset: int = 600, end_offset: int = 180
+        self, start_offset: int = 600, end_offset: int = 180,
+        instances: List[str] = None
     ) -> List:
         """
         查询 Memorystore (Redis) CPU 使用率（窗口内均值）
 
+        使用 REDUCE_MEAN + group_by instance_id，将同一实例的多个 shard/node
+        聚合为一个均值，确保每个实例只输出一条数据。
+
         Args:
-            start_offset: 查询窗口起始（距当前秒数），默认 600
-            end_offset:   查询窗口结束（距当前秒数），默认 180
+            start_offset: 查询窗口起始（距当前秒数）
+            end_offset:   查询窗口结束（距当前秒数）
+            instances:    指定实例列表，为空则查询所有
 
         Returns:
             TimeSeries 列表（每个实例一条）
         """
-        filter_str = f'metric.type = "{self.MEMORystore_CPU_METRIC}"'
+        base_filter = f'metric.type = "{self.MEMORystore_CPU_METRIC}"'
+        if instances:
+            filter_str = self._add_instance_filter(
+                base_filter, "instance_id", instances
+            )
+        else:
+            filter_str = base_filter
 
-        logger.info(
-            f"Memorystore 查询: filter={filter_str}, "
-            f"window=(now-{start_offset}s, now-{end_offset}s)"
-        )
+        logger.info(f"Memorystore 查询: filter={filter_str}")
 
         try:
-            request = self._build_request(filter_str, start_offset, end_offset)
+            request = self._build_request(
+                filter_str, start_offset, end_offset,
+                # 按 instance_id 分组聚合，将多个 shard/metric label 合并为一个值
+                group_by_fields=["resource.labels.instance_id"],
+            )
             results = list(self.client.list_time_series(request=request))
             logger.info(f"Memorystore 返回 {len(results)} 个时间序列")
             return results
