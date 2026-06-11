@@ -12,7 +12,7 @@ scrape_interval: 60
 query_offset: 240
 
 # Prometheus 指标暴露端口
-port: 9100
+port: 9168
 
 # Cloud SQL 监控配置
 cloudsql:

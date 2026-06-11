@@ -104,12 +104,12 @@ memorystore:
 python main.py
 ```
 
-Exporter 默认在 `http://localhost:9100/metrics` 暴露指标。
+Exporter 默认在 `http://localhost:9168/metrics` 暴露指标。
 
 ### 5. 验证
 
 ```bash
-curl http://localhost:9100/metrics
+curl http://localhost:9168/metrics
 ```
 
 输出示例：
@@ -205,7 +205,7 @@ scrape_configs:
     scrape_interval: 60s
     scrape_timeout: 30s
     static_configs:
-      - targets: ['<exporter-host>:9100']
+      - targets: ['<exporter-host>:9168']
 ```
 
 ## 配置参数说明
@@ -215,7 +215,7 @@ scrape_configs:
 | `gcp.project_id` | string | - | GCP 项目 ID（必填） |
 | `scrape_interval` | int | 60 | 采集间隔，单位秒，最小 60 |
 | `query_offset` | int | 240 | 查询时间偏移，应对数据延迟 |
-| `port` | int | 9100 | Prometheus 指标暴露端口 |
+| `port` | int | 9168 | Prometheus 指标暴露端口 |
 | `cloudsql.enabled` | bool | true | 是否采集 Cloud SQL 指标 |
 | `cloudsql.instances` | list | [] | 指定实例，空则自动发现 |
 | `memorystore.enabled` | bool | true | 是否采集 Memorystore 指标 |
