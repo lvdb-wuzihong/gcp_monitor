@@ -214,7 +214,7 @@ scrape_configs:
 |------|------|--------|------|
 | `gcp.project_id` | string | - | GCP 项目 ID（必填） |
 | `scrape_interval` | int | 60 | 采集间隔，单位秒，最小 60 |
-| `query_offset` | int | 240 | 查询时间偏移，应对数据延迟 |
+| `query_offset` | int | 180 | 查询时间偏移，应对数据延迟（GCP 内部部署可用 180） |
 | `port` | int | 9168 | Prometheus 指标暴露端口 |
 | `cloudsql.enabled` | bool | true | 是否采集 Cloud SQL 指标 |
 | `cloudsql.instances` | list | [] | 指定实例，空则自动发现 |
