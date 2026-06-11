@@ -191,6 +191,15 @@ class GCPCollector:
                 latest_point.interval.start_time.timestamp() * 1000
             )
 
+            # 调试日志：打印每条 TimeSeries 的 metric labels 和值
+            metric_labels = dict(ts.metric.labels) if ts.metric.labels else {}
+            logger.info(
+                f"  [DEBUG] {instance_name} "
+                f"labels={metric_labels} "
+                f"value={cpu_val:.4f} s/s "
+                f"points={len(ts.points)}"
+            )
+
             if instance_name in merged:
                 # 同一实例多条 → 累加（user/system/main/background 可加）
                 merged[instance_name]["value"] += cpu_val
