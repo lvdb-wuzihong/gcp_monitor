@@ -28,3 +28,4 @@ service-account-key.json
 # 系统文件
 .DS_Store
 Thumbs.db
+config.yaml
