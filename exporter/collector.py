@@ -150,16 +150,18 @@ class GCPCollector:
 
     def _collect_memorystore(self):
         """
-        采集 Memorystore (Redis) 主线程 CPU 时间占比
+        采集 Memorystore (Redis) 主线程 CPU 使用率
 
         指标: redis.googleapis.com/stats/cpu_utilization_main_thread
-        单位: CPU 秒/秒（s/s），乘以 100 转为百分比形式。
-        GCP 官方建议阈值：不要超过 0.8（即 80%）。
+        文档: "CPU-seconds consumed by the Redis server main thread,
+               broken down by system/user space and parent/child relationship"
+        单位: CPU 秒/分钟（CPU-seconds per minute）
+        换算: CPU% = sum(sys + user) / 60 × 100
         """
         metric = GaugeMetricFamily(
             "gcp_memorystore_cpu_utilization",
-            "Memorystore Redis main thread CPU s/s * 100 (GCP threshold: 80 = 0.8s/s)",
-            labels=["instance"],
+            "Memorystore Redis main thread CPU utilization % (cpu_seconds_per_min / 60 * 100)",
+            labels=["instance", "role"],
         )
 
         instances = self.memorystore_config.get("instances", []) or []
@@ -170,8 +172,9 @@ class GCPCollector:
         )
 
         count = 0
-        # 兑底合并：万一同一实例返回多条，取最大值（主线程 CPU 不应累加）
-        merged = {}  # {instance_name: {"value": float, "timestamp_ms": int}}
+        # 按 (instance, role) 分组，将 sys + user 累加
+        # 公式: CPU% = total_cpu_seconds / 60 * 100
+        merged = {}  # {(instance, role): {"cpu_seconds": float, "timestamp_ms": int}}
 
         for ts in results:
             raw_id = ts.resource.labels.get("instance_id", "unknown")
@@ -184,41 +187,39 @@ class GCPCollector:
             if not ts.points:
                 continue
 
+            # 提取 metric labels
+            metric_labels = dict(ts.metric.labels) if ts.metric.labels else {}
+            role = metric_labels.get("role", "unknown")  # primary / replica
+
             latest_point = ts.points[0]
-            cpu_val = latest_point.value.double_value  # 原始值 s/s
+            cpu_seconds = latest_point.value.double_value  # CPU-seconds per minute
             timestamp_ms = int(
                 latest_point.interval.start_time.timestamp() * 1000
             )
 
-            # 调试日志：打印每条 TimeSeries 的 metric labels 和值
-            metric_labels = dict(ts.metric.labels) if ts.metric.labels else {}
-            logger.info(
-                f"  [DEBUG] {instance_name} "
-                f"labels={metric_labels} "
-                f"value={cpu_val:.4f} s/s "
-                f"points={len(ts.points)}"
-            )
-
-            if instance_name in merged:
-                # 同一实例多条 → 取最大值（主线程 CPU 不应累加）
-                if cpu_val > merged[instance_name]["value"]:
-                    merged[instance_name]["value"] = cpu_val
-                    merged[instance_name]["timestamp_ms"] = timestamp_ms
+            key = (instance_name, role)
+            if key in merged:
+                # sys + user 累加
+                merged[key]["cpu_seconds"] += cpu_seconds
+                merged[key]["timestamp_ms"] = max(
+                    merged[key]["timestamp_ms"], timestamp_ms
+                )
             else:
-                merged[instance_name] = {"value": cpu_val, "timestamp_ms": timestamp_ms}
+                merged[key] = {"cpu_seconds": cpu_seconds, "timestamp_ms": timestamp_ms}
 
-        for instance_name, data in merged.items():
-            cpu_pct = data["value"] * 100
+        for (instance_name, role), data in merged.items():
+            # CPU% = CPU-seconds/分钟 ÷ 60 × 100
+            cpu_pct = data["cpu_seconds"] / 60 * 100
             metric.add_metric(
-                labels=[instance_name],
+                labels=[instance_name, role],
                 value=round(cpu_pct, 2),
                 timestamp=data["timestamp_ms"],
             )
             count += 1
             logger.info(
-                f"Memorystore [{instance_name}] CPU: {cpu_pct:.2f} "
-                f"(raw: {data['value']:.4f} s/s)"
+                f"Memorystore [{instance_name}] {role} CPU: {cpu_pct:.2f}% "
+                f"(raw: {data['cpu_seconds']:.4f} cpu-s/min)"
             )
 
-        logger.info(f"Memorystore: 输出 {count} 个实例指标")
+        logger.info(f"Memorystore: 输出 {count} 个指标")
         yield metric
