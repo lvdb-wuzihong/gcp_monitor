@@ -134,7 +134,7 @@ class GCPCollector:
             cpu_val = latest_point.value.double_value * 100
 
             timestamp_ms = int(
-                latest_point.interval.start_time.timestamp() * 1000
+                latest_point.interval.end_time.timestamp() * 1000
             )
 
             metric.add_metric(
@@ -194,7 +194,7 @@ class GCPCollector:
             latest_point = ts.points[0]
             cpu_seconds = latest_point.value.double_value  # CPU-seconds per minute
             timestamp_ms = int(
-                latest_point.interval.start_time.timestamp() * 1000
+                latest_point.interval.end_time.timestamp() * 1000
             )
 
             key = (instance_name, role)
