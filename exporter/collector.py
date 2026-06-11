@@ -1,13 +1,8 @@
 """
 指标采集逻辑模块 — CustomCollector 模式
 
-每次 Prometheus 抓取时调用 collect()，实时查询 GCP API，
-使用数据点的真实时间戳（而非抓取时间）上报指标。
-
-参照 Google 官方示例的核心做法：
-- GaugeMetricFamily 动态构建指标
-- add_metric 传入数据点的 interval.start_time 作为 timestamp
-- 不做 aggregation，取最新原始数据点
+每次 Prometheus 抓取时调用 collect()，实时查询 GCP API。
+使用 ALIGN_MEAN 聚合后，每个实例只返回一条 TimeSeries（窗口内均值）。
 """
 
 import logging
@@ -91,12 +86,32 @@ class GCPCollector:
         success_metric.add_metric([], 1)
         yield success_metric
 
+    @staticmethod
+    def _extract_cloudsql_instance_name(database_id: str) -> str:
+        """
+        从 database_id 提取实例名
+        格式: "project_id:instance_name" → "instance_name"
+        """
+        if ":" in database_id:
+            return database_id.split(":", 1)[1]
+        return database_id
+
+    @staticmethod
+    def _extract_memorystore_instance_name(instance_id: str) -> str:
+        """
+        从完整路径提取实例名
+        格式: "projects/xxx/locations/yyy/instances/zzz" → "zzz"
+        """
+        if "/" in instance_id:
+            return instance_id.rsplit("/", 1)[-1]
+        return instance_id
+
     def _collect_cloudsql(self):
         """采集 Cloud SQL CPU 使用率"""
         metric = GaugeMetricFamily(
             "gcp_cloudsql_cpu_utilization",
             "Cloud SQL CPU Utilization (percentage 0-100)",
-            labels=["database_id"],
+            labels=["instance"],
         )
 
         results = self.gcp_client.query_cloudsql_cpu(
@@ -106,47 +121,8 @@ class GCPCollector:
 
         count = 0
         for ts in results:
-            db_id = ts.resource.labels.get("database_id", "unknown")
-
-            if not ts.points:
-                continue
-
-            # points[0] 是最新的数据点
-            latest_point = ts.points[0]
-            cpu_val = latest_point.value.double_value * 100  # 转为百分比
-
-            # 用数据点的真实时间戳（毫秒），而非抓取时间
-            timestamp_ms = int(
-                latest_point.interval.start_time.timestamp() * 1000
-            )
-
-            metric.add_metric(
-                labels=[db_id],
-                value=cpu_val,
-                timestamp=timestamp_ms,
-            )
-            count += 1
-            logger.debug(f"Cloud SQL [{db_id}] CPU: {cpu_val:.2f}%")
-
-        logger.info(f"Cloud SQL: 输出 {count} 个实例指标")
-        yield metric
-
-    def _collect_memorystore(self):
-        """采集 Memorystore (Redis) CPU 使用率"""
-        metric = GaugeMetricFamily(
-            "gcp_memorystore_cpu_utilization",
-            "Memorystore Redis CPU Utilization (percentage 0-100)",
-            labels=["instance_id"],
-        )
-
-        results = self.gcp_client.query_memorystore_cpu(
-            start_offset=self.start_offset,
-            end_offset=self.end_offset,
-        )
-
-        count = 0
-        for ts in results:
-            instance_id = ts.resource.labels.get("instance_id", "unknown")
+            raw_id = ts.resource.labels.get("database_id", "unknown")
+            instance_name = self._extract_cloudsql_instance_name(raw_id)
 
             if not ts.points:
                 continue
@@ -159,12 +135,51 @@ class GCPCollector:
             )
 
             metric.add_metric(
-                labels=[instance_id],
-                value=cpu_val,
+                labels=[instance_name],
+                value=round(cpu_val, 2),
                 timestamp=timestamp_ms,
             )
             count += 1
-            logger.debug(f"Memorystore [{instance_id}] CPU: {cpu_val:.2f}%")
+            logger.info(f"Cloud SQL [{instance_name}] CPU: {cpu_val:.2f}%")
+
+        logger.info(f"Cloud SQL: 输出 {count} 个实例指标")
+        yield metric
+
+    def _collect_memorystore(self):
+        """采集 Memorystore (Redis) CPU 使用率"""
+        metric = GaugeMetricFamily(
+            "gcp_memorystore_cpu_utilization",
+            "Memorystore Redis CPU Utilization (percentage 0-100)",
+            labels=["instance"],
+        )
+
+        results = self.gcp_client.query_memorystore_cpu(
+            start_offset=self.start_offset,
+            end_offset=self.end_offset,
+        )
+
+        count = 0
+        for ts in results:
+            raw_id = ts.resource.labels.get("instance_id", "unknown")
+            instance_name = self._extract_memorystore_instance_name(raw_id)
+
+            if not ts.points:
+                continue
+
+            latest_point = ts.points[0]
+            cpu_val = latest_point.value.double_value * 100
+
+            timestamp_ms = int(
+                latest_point.interval.start_time.timestamp() * 1000
+            )
+
+            metric.add_metric(
+                labels=[instance_name],
+                value=round(cpu_val, 2),
+                timestamp=timestamp_ms,
+            )
+            count += 1
+            logger.info(f"Memorystore [{instance_name}] CPU: {cpu_val:.2f}%")
 
         logger.info(f"Memorystore: 输出 {count} 个实例指标")
         yield metric

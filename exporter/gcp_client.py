@@ -1,9 +1,9 @@
 """
 GCP Cloud Monitoring API 客户端
 
-核心原则（参照 Google 官方示例）：
-1. filter 只用 metric.type，不加 resource.type 限制，避免类型名不匹配导致空结果
-2. 不指定 aggregation，让 API 返回原始数据点
+查询策略：
+1. filter 只用 metric.type，不加 resource.type 限制
+2. 使用 ALIGN_MEAN 聚合：将窗口内多个数据点合并为一个均值，每个实例只返回一条 TimeSeries
 3. 时间窗口用 (now - start_offset, now - end_offset) 覆盖延迟
 """
 
@@ -46,24 +46,42 @@ class GCPMonitoringClient:
             "start_time": {"seconds": int(now - start_offset)},
         })
 
+    def _build_request(self, filter_str, start_offset, end_offset):
+        """
+        构建 ListTimeSeries 请求（带 ALIGN_MEAN 聚合）
+
+        ALIGN_MEAN 会将时间窗口内所有数据点合并为一个均值，
+        确保每个实例只返回一条 TimeSeries，避免返回多个原始数据点。
+        alignment_period 设为整个窗口大小，保证只产生一个聚合点。
+        """
+        interval = self._build_interval(start_offset, end_offset)
+        alignment_period = start_offset - end_offset  # 窗口大小
+
+        return {
+            "name": self.project_name,
+            "filter": filter_str,
+            "interval": interval,
+            "view": monitoring_v3.ListTimeSeriesRequest.TimeSeriesView.FULL,
+            "aggregation": {
+                "alignment_period": {"seconds": alignment_period},
+                "per_series_aligner": monitoring_v3.Aggregation.Aligner.ALIGN_MEAN,
+            },
+        }
+
     def query_cloudsql_cpu(
         self, start_offset: int = 600, end_offset: int = 180
     ) -> List:
         """
-        查询 Cloud SQL CPU 使用率
-
-        filter 只指定 metric.type，不限制 resource.type。
-        不使用 aggregation，获取原始数据点。
+        查询 Cloud SQL CPU 使用率（窗口内均值）
 
         Args:
             start_offset: 查询窗口起始（距当前秒数），默认 600（10分钟前）
             end_offset:   查询窗口结束（距当前秒数），默认 180（3分钟前）
 
         Returns:
-            TimeSeries 列表
+            TimeSeries 列表（每个实例一条）
         """
         filter_str = f'metric.type = "{self.CLOUDSQL_CPU_METRIC}"'
-        interval = self._build_interval(start_offset, end_offset)
 
         logger.info(
             f"Cloud SQL 查询: filter={filter_str}, "
@@ -71,21 +89,9 @@ class GCPMonitoringClient:
         )
 
         try:
-            results = self.client.list_time_series(request={
-                "name": self.project_name,
-                "filter": filter_str,
-                "interval": interval,
-                "view": monitoring_v3.ListTimeSeriesRequest.TimeSeriesView.FULL,
-            })
-            results = list(results)
+            request = self._build_request(filter_str, start_offset, end_offset)
+            results = list(self.client.list_time_series(request=request))
             logger.info(f"Cloud SQL 返回 {len(results)} 个时间序列")
-
-            # 打印每个时间序列的资源标签，帮助确认 label 格式
-            for ts in results:
-                logger.debug(
-                    f"  resource.labels={dict(ts.resource.labels)}, "
-                    f"points_count={len(ts.points)}"
-                )
             return results
 
         except Exception as e:
@@ -96,17 +102,16 @@ class GCPMonitoringClient:
         self, start_offset: int = 600, end_offset: int = 180
     ) -> List:
         """
-        查询 Memorystore (Redis) CPU 使用率
+        查询 Memorystore (Redis) CPU 使用率（窗口内均值）
 
         Args:
             start_offset: 查询窗口起始（距当前秒数），默认 600
             end_offset:   查询窗口结束（距当前秒数），默认 180
 
         Returns:
-            TimeSeries 列表
+            TimeSeries 列表（每个实例一条）
         """
         filter_str = f'metric.type = "{self.MEMORystore_CPU_METRIC}"'
-        interval = self._build_interval(start_offset, end_offset)
 
         logger.info(
             f"Memorystore 查询: filter={filter_str}, "
@@ -114,20 +119,9 @@ class GCPMonitoringClient:
         )
 
         try:
-            results = self.client.list_time_series(request={
-                "name": self.project_name,
-                "filter": filter_str,
-                "interval": interval,
-                "view": monitoring_v3.ListTimeSeriesRequest.TimeSeriesView.FULL,
-            })
-            results = list(results)
+            request = self._build_request(filter_str, start_offset, end_offset)
+            results = list(self.client.list_time_series(request=request))
             logger.info(f"Memorystore 返回 {len(results)} 个时间序列")
-
-            for ts in results:
-                logger.debug(
-                    f"  resource.labels={dict(ts.resource.labels)}, "
-                    f"points_count={len(ts.points)}"
-                )
             return results
 
         except Exception as e:
