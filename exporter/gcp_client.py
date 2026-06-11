@@ -21,7 +21,7 @@ class GCPMonitoringClient:
 
     # 指标类型
     CLOUDSQL_CPU_METRIC = "cloudsql.googleapis.com/database/cpu/utilization"
-    MEMORystore_CPU_METRIC = "redis.googleapis.com/stats/cpu_utilization"
+    MEMORystore_CPU_METRIC = "redis.googleapis.com/stats/cpu_utilization_main_thread"
 
     def __init__(self, project_id: str):
         self.project_id = project_id

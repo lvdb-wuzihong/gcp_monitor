@@ -150,15 +150,15 @@ class GCPCollector:
 
     def _collect_memorystore(self):
         """
-        采集 Memorystore (Redis) CPU 时间占比
+        采集 Memorystore (Redis) 主线程 CPU 时间占比
 
-        注意：redis.googleapis.com/stats/cpu_utilization 的单位是
-        CPU 秒/秒（不是百分比），乘以 100 转为百分比形式。
+        指标: redis.googleapis.com/stats/cpu_utilization_main_thread
+        单位: CPU 秒/秒（s/s），乘以 100 转为百分比形式。
         GCP 官方建议阈值：不要超过 0.8（即 80%）。
         """
         metric = GaugeMetricFamily(
             "gcp_memorystore_cpu_utilization",
-            "Memorystore Redis CPU seconds per second * 100 (GCP threshold: 80 = 0.8s/s)",
+            "Memorystore Redis main thread CPU s/s * 100 (GCP threshold: 80 = 0.8s/s)",
             labels=["instance"],
         )
 
@@ -170,8 +170,7 @@ class GCPCollector:
         )
 
         count = 0
-        # 兑底合并：同一实例的多个 metric label 维度（cpu_type/process_type）
-        # 按实例名累加，CPU 秒/秒是可加的
+        # 兑底合并：万一同一实例返回多条，取最大值（主线程 CPU 不应累加）
         merged = {}  # {instance_name: {"value": float, "timestamp_ms": int}}
 
         for ts in results:
