@@ -200,12 +200,10 @@ class GCPCollector:
             )
 
             if instance_name in merged:
-                # 同一实例多条 → 累加（user/system/main/background 可加）
-                merged[instance_name]["value"] += cpu_val
-                # 取较新的时间戳
-                merged[instance_name]["timestamp_ms"] = max(
-                    merged[instance_name]["timestamp_ms"], timestamp_ms
-                )
+                # 同一实例多条 → 取最大值（主线程 CPU 不应累加）
+                if cpu_val > merged[instance_name]["value"]:
+                    merged[instance_name]["value"] = cpu_val
+                    merged[instance_name]["timestamp_ms"] = timestamp_ms
             else:
                 merged[instance_name] = {"value": cpu_val, "timestamp_ms": timestamp_ms}
 
