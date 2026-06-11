@@ -161,7 +161,7 @@ class GCPCollector:
         metric = GaugeMetricFamily(
             "gcp_memorystore_cpu_utilization",
             "Memorystore Redis main thread CPU utilization % (cpu_seconds_per_min / 60 * 100)",
-            labels=["instance", "role"],
+            labels=["redis_name", "role"],
         )
 
         instances = self.memorystore_config.get("instances", []) or []
@@ -210,6 +210,7 @@ class GCPCollector:
         for (instance_name, role), data in merged.items():
             # CPU% = CPU-seconds/分钟 ÷ 60 × 100
             cpu_pct = data["cpu_seconds"] / 60 * 100
+            # 用 GCP 实例名作为 redis_name 标签，和 redis_exporter 的 relabel 保持一致
             metric.add_metric(
                 labels=[instance_name, role],
                 value=round(cpu_pct, 2),
